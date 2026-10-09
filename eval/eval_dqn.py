@@ -97,11 +97,7 @@ def load_policy(policy_name: str, checkpoint_path: str, cfg: dict,
         policy = MLPDQNPolicy(n_bins, max_links=max_links, hidden=hidden)
 
     state_dict = torch.load(checkpoint_path, map_location=device)
-    missing, unexpected = policy.load_state_dict(state_dict, strict=False)
-    if missing:
-        print(f"  [warn] checkpoint missing keys (new arch keys init to default): {missing}")
-    if unexpected:
-        print(f"  [warn] checkpoint has unexpected keys (ignored): {unexpected}")
+    policy.load_state_dict(state_dict, strict=True)
     policy.to(device)
     policy.eval()
     return policy
@@ -135,6 +131,9 @@ def make_fixed_env(cfg: dict, link_length: float, link_mass: float,
         frame_skip          = env_cfg["frame_skip"],
         max_episode_steps   = env_cfg["max_episode_steps"],
         termination_angle   = env_cfg["termination_angle"],
+        angle_noise=cfg.get("init", {}).get("angle_noise", 0.05),
+        vel_noise=cfg.get("init", {}).get("vel_noise", 0.01),
+        reward_config=cfg.get("rewards", {}),
         max_links           = env_cfg.get("max_links"),
     )
 
@@ -145,22 +144,21 @@ def make_fixed_env(cfg: dict, link_length: float, link_mass: float,
 
 def eval_point(policy, env, n_episodes: int, act_bins: np.ndarray,
                device: torch.device) -> float:
+    if n_episodes <= 0:
+        raise ValueError("n_episodes must be positive")
     rewards = []
     for _ in range(n_episodes):
-        try:
-            obs, _ = env.reset()
-            ep_reward = 0.0
-            done = False
-            while not done:
-                idx   = policy.get_action(obs, epsilon=0.0, device=device)
-                force = act_bins[idx]
-                obs, reward, terminated, truncated, _ = env.step(
-                    np.array([force], dtype=np.float32))
-                ep_reward += reward
-                done = terminated or truncated
-            rewards.append(ep_reward)
-        except Exception:
-            rewards.append(0.0)   # treat MuJoCo crashes on extreme params as 0
+        obs, _ = env.reset(seed=int(np.random.randint(0, 2**31 - 1)))
+        ep_reward = 0.0
+        done = False
+        while not done:
+            idx   = policy.get_action(obs, epsilon=0.0, device=device)
+            force = act_bins[idx]
+            obs, reward, terminated, truncated, _ = env.step(
+                np.array([force], dtype=np.float32))
+            ep_reward += reward
+            done = terminated or truncated
+        rewards.append(ep_reward)
     return float(np.mean(rewards)) if rewards else 0.0
 
 

@@ -347,8 +347,8 @@ def test_graph_construction():
     # Cart node checks
     assert graph.node_features[0, 0] == 1.0,  "Cart node: is_cart should be 1"
     assert graph.node_features[0, 1] == 0.0,  "Cart node: is_joint should be 0"
-    assert graph.node_features[0, 6] == cart_pos, "Cart node: x not set correctly"
-    assert graph.node_features[0, 7] == cart_vel, "Cart node: ẋ not set correctly"
+    assert np.isclose(graph.node_features[0, 6], cart_pos / 2.5), "Cart node: x not set correctly"
+    assert np.isclose(graph.node_features[0, 7], cart_vel / 5.0), "Cart node: ẋ not set correctly"
 
     # End node checks (n_links=1 → node 1 is the end node)
     assert graph.node_features[1, 2] == 1.0,  "End node: is_end should be 1"
@@ -361,8 +361,8 @@ def test_graph_construction():
 
     # Edge feature checks
     for e in range(graph.n_edges):
-        assert graph.edge_features[e, 0] == L,     f"Edge {e}: length mismatch"
-        assert graph.edge_features[e, 1] == M_ROD, f"Edge {e}: mass mismatch"
+        assert np.isclose(graph.edge_features[e, 0], (L - 0.3) / 0.9),     f"Edge {e}: length mismatch"
+        assert np.isclose(graph.edge_features[e, 1], (M_ROD - 0.1) / 1.9), f"Edge {e}: mass mismatch"
 
     # Node feature dtype
     assert graph.node_features.dtype == np.float32, "node_features dtype should be float32"

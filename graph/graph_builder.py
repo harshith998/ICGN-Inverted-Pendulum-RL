@@ -21,13 +21,13 @@ Node feature vector:
   *cos(theta) is padded to 0 for the cart
   cart_mass normalised as (m_c - 0.5) / 2.5 so [0.5, 3.0] → [0, 1]
 
-  The angle is the angle of the lower edge/rod for a node, to the verticle.
+  Angles are relative hinge angles, measured from the parent link.
 
 Edge feature vector  (EDGE_FEAT_DIM = 2)
 -----------------------------------------
   Index  Field
-  0      length  (metres)
-  1      mass    (kg)
+  0      length  ((metres - 0.3) / 0.9)
+  1      mass    ((kg - 0.1) / 1.9)
 
 Both the forward and backward edge for a given rod share the same features.
 The GNN learns directionality from the edge_index structure.

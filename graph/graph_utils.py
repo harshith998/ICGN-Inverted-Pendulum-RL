@@ -58,7 +58,7 @@ def graph_summary(graph: PendulumGraph) -> str:
     """Human-readable summary of a graph for debugging."""
     lines = [
         f"PendulumGraph: {graph.n_nodes} nodes, {graph.n_edges} edges",
-        "Node features [is_cart, is_joint, is_end, sin_θ, cos_θ, θ̇, x, ẋ]:",
+        "Node features [is_cart, is_joint, is_end, sin_θ, cos_θ, θ̇, x, ẋ, cart_mass] (scaled):",
     ]
     for i, row in enumerate(graph.node_features):
         lines.append(f"  node {i}: {np.round(row, 4)}")
@@ -68,6 +68,6 @@ def graph_summary(graph: PendulumGraph) -> str:
         src = graph.edge_index[0, e]
         dst = graph.edge_index[1, e]
         feat = graph.edge_features[e]
-        lines.append(f"  {src} -> {dst} | L={feat[0]:.3f}m, m={feat[1]:.3f}kg")
+        lines.append(f"  {src} -> {dst} | length_scaled={feat[0]:.3f}, mass_scaled={feat[1]:.3f}")
 
     return "\n".join(lines)

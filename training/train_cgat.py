@@ -29,7 +29,6 @@ import argparse
 import time
 import numpy as np
 import torch
-import torch.nn.functional as F
 import yaml
 import matplotlib.pyplot as plt
 
@@ -37,146 +36,9 @@ from env.pendulum_env import VariablePendulumEnv
 from models.cgat import load_cgat_variant, VARIANTS
 
 
-def set_seed(seed: int | None):
-    if seed is None:
-        return
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def seed_suffix(seed: int | None) -> str:
-    return "" if seed is None else f"_seed{seed}"
-
-
-# ── Observation helpers (identical to train_ppo.py) ─────────────────────────
-
-def batch_obs(obs_list: list) -> dict:
-    return {
-        "node_features": np.stack([o["node_features"] for o in obs_list]),
-        "edge_index":    np.stack([o["edge_index"]    for o in obs_list]),
-        "edge_features": np.stack([o["edge_features"] for o in obs_list]),
-        "n_nodes":       np.stack([o["n_nodes"]       for o in obs_list]),
-        "n_edges":       np.stack([o["n_edges"]       for o in obs_list]),
-    }
-
-
-def obs_to_tensor(obs_batch: dict, device: torch.device) -> dict:
-    return {
-        "node_features": torch.tensor(obs_batch["node_features"], dtype=torch.float32).to(device),
-        "edge_index":    torch.tensor(obs_batch["edge_index"],    dtype=torch.int64).to(device),
-        "edge_features": torch.tensor(obs_batch["edge_features"], dtype=torch.float32).to(device),
-        "n_nodes":       torch.tensor(obs_batch["n_nodes"],       dtype=torch.int64).to(device),
-        "n_edges":       torch.tensor(obs_batch["n_edges"],       dtype=torch.int64).to(device),
-    }
-
-
-# ── Rollout Buffer (identical to train_ppo.py) ───────────────────────────────
-
-class RolloutBuffer:
-    def __init__(self, rollout_steps, n_envs, max_nodes, max_edges, gamma, gae_lambda):
-        self.rollout_steps = rollout_steps
-        self.n_envs        = n_envs
-        self.gamma         = gamma
-        self.gae_lambda    = gae_lambda
-
-        T, N = rollout_steps, n_envs
-        self.node_feat  = np.zeros((T, N, max_nodes, 9),  dtype=np.float32)
-        self.edge_index = np.zeros((T, N, 2, max_edges),  dtype=np.int64)
-        self.edge_feat  = np.zeros((T, N, max_edges, 2),  dtype=np.float32)
-        self.n_nodes    = np.zeros((T, N, 1),              dtype=np.int64)
-        self.n_edges    = np.zeros((T, N, 1),              dtype=np.int64)
-
-        self.actions    = np.zeros((T, N), dtype=np.float32)
-        self.log_probs  = np.zeros((T, N), dtype=np.float32)
-        self.rewards    = np.zeros((T, N), dtype=np.float32)
-        self.values     = np.zeros((T, N), dtype=np.float32)
-        self.dones      = np.zeros((T, N), dtype=np.float32)
-        self.returns    = np.zeros((T, N), dtype=np.float32)
-        self.advantages = np.zeros((T, N), dtype=np.float32)
-        self.pos = 0
-
-    def store(self, obs_list, actions, log_probs, rewards, values, dones):
-        t = self.pos
-        for n, obs in enumerate(obs_list):
-            self.node_feat[t, n]  = obs["node_features"]
-            self.edge_index[t, n] = obs["edge_index"]
-            self.edge_feat[t, n]  = obs["edge_features"]
-            self.n_nodes[t, n]    = obs["n_nodes"]
-            self.n_edges[t, n]    = obs["n_edges"]
-        self.actions[t]   = actions
-        self.log_probs[t] = log_probs
-        self.rewards[t]   = rewards
-        self.values[t]    = values
-        self.dones[t]     = dones
-        self.pos += 1
-
-    def compute_gae(self, last_values):
-        gae = np.zeros(self.n_envs, dtype=np.float32)
-        for t in reversed(range(self.rollout_steps)):
-            next_val = last_values if t == self.rollout_steps - 1 else self.values[t + 1]
-            delta    = (self.rewards[t]
-                        + self.gamma * next_val * (1.0 - self.dones[t])
-                        - self.values[t])
-            gae      = delta + self.gamma * self.gae_lambda * (1.0 - self.dones[t]) * gae
-            self.advantages[t] = gae
-            self.returns[t]    = gae + self.values[t]
-
-    def generate_batches(self, batch_size, device):
-        T, N  = self.rollout_steps, self.n_envs
-        total = T * N
-        indices = np.random.permutation(total)
-
-        nf_f  = self.node_feat.reshape(total, *self.node_feat.shape[2:])
-        ei_f  = self.edge_index.reshape(total, *self.edge_index.shape[2:])
-        ef_f  = self.edge_feat.reshape(total, *self.edge_feat.shape[2:])
-        nn_f  = self.n_nodes.reshape(total, 1)
-        ne_f  = self.n_edges.reshape(total, 1)
-        act_f = self.actions.reshape(total)
-        lp_f  = self.log_probs.reshape(total)
-        ret_f = self.returns.reshape(total)
-        adv_f = self.advantages.reshape(total)
-
-        for start in range(0, total, batch_size):
-            idx = indices[start:start + batch_size]
-            obs_b = {
-                "node_features": torch.tensor(nf_f[idx],  dtype=torch.float32).to(device),
-                "edge_index":    torch.tensor(ei_f[idx],  dtype=torch.int64).to(device),
-                "edge_features": torch.tensor(ef_f[idx],  dtype=torch.float32).to(device),
-                "n_nodes":       torch.tensor(nn_f[idx],  dtype=torch.int64).to(device),
-                "n_edges":       torch.tensor(ne_f[idx],  dtype=torch.int64).to(device),
-            }
-            yield (
-                obs_b,
-                torch.tensor(act_f[idx], dtype=torch.float32).to(device).unsqueeze(1),
-                torch.tensor(lp_f[idx],  dtype=torch.float32).to(device),
-                torch.tensor(ret_f[idx], dtype=torch.float32).to(device),
-                torch.tensor(adv_f[idx], dtype=torch.float32).to(device),
-            )
-
-    def reset(self):
-        self.pos = 0
-
-
-# ── PPO loss (identical to train_ppo.py) ─────────────────────────────────────
-
-def compute_ppo_loss(policy, obs, actions, old_log_probs, returns, advantages,
-                     clip_epsilon, value_coef, entropy_coef):
-    _, new_log_probs, entropy, values = policy.get_action_and_value(obs, action=actions)
-
-    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
-    ratio       = (new_log_probs - old_log_probs).exp()
-    surr1       = ratio * advantages
-    surr2       = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon) * advantages
-    policy_loss = -torch.min(surr1, surr2).mean()
-
-    value_loss   = F.mse_loss(values.squeeze(-1), returns)
-    entropy_loss = -entropy.mean()
-
-    total = policy_loss + value_coef * value_loss + entropy_coef * entropy_loss
-    return total, policy_loss.item(), value_loss.item(), (-entropy_loss).item()
+from training.ppo_utils import (
+    RolloutBuffer, batch_obs, compute_ppo_loss, obs_to_tensor, seed_suffix, set_seed,
+)
 
 
 # ── Beta extraction helper ────────────────────────────────────────────────────
@@ -519,7 +381,7 @@ def train(cfg, variant: str = "base", plot: bool = True, show_plot: bool = True,
                 if done:
                     all_ep_rewards.append(ep_rewards[n])
                     all_ep_lengths.append(ep_lengths[n])
-                    all_ep_wins.append(1 if ep_lengths[n] >= max_ep_steps else 0)
+                    all_ep_wins.append(int(truncated and not terminated))
                     ep_count      += 1
                     ep_rewards[n]  = 0.0
                     ep_lengths[n]  = 0

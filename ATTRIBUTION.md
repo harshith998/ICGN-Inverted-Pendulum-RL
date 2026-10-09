@@ -14,7 +14,7 @@ This project implements a graph neural network-based reinforcement learning syst
   Designed and implemented the full custom Gymnasium environment from scratch. This includes the programmatic MuJoCo XML builder that dynamically generates valid MJCF models for arbitrary link counts, the domain randomization logic (per-episode sampling of link lengths, masses, cart mass), termination conditions, and the composite reward function with upright bonus, alive bonus, force penalty, and rail penalty.
 
 - **Graph encoding (`graph/graph_builder.py`, `graph/graph_utils.py`)**
-  Designed the full graph observation representation: node feature encoding (8D: type flags, sin/cos angles, angular velocity, cart state), bidirectional edge construction with normalized physical parameters, padding and masking scheme for variable-topology graphs, and feature normalization to [-1, 1].
+  Designed the full graph observation representation: node feature encoding (9D: type flags, sin/cos angles, angular velocity, cart state, cart mass), bidirectional edge construction with normalized physical parameters, padding and masking scheme for variable-topology graphs, and feature normalization to [-1, 1].
 
 - **Training infrastructure (`training/train_dqn.py`, `training/train_ppo.py`, `training/ablation_ppo.py`)**
   Wrote the full DQN training loop (replay buffer, double-DQN target computation, epsilon-greedy schedule, auxiliary loss, checkpointing) and the PPO training loop (parallel environment collection, GAE advantage estimation, clipped surrogate objective, LR annealing, best-model saving). Also built the hyperparameter ablation framework.
@@ -30,7 +30,7 @@ This project implements a graph neural network-based reinforcement learning syst
 
 ---
 
-### Written Rohan (notebookes, codebase integrated by Harshith)
+### Written by Rohan (notebooks, integrated by Harshith)
 
 - **MLP baselines (`models/mlp_dqn.py`, `models/mlp_ppo.py`)**
   Rohan wrote MLP policy notebooks for an earlier flat-observation version of this project. I adapted these into the modular class-based architecture, integrated them with the graph observation format (flattening padded node and edge features), added dropout regularization, and wired them into the shared base classes.
@@ -65,3 +65,11 @@ Claude Code (claude-sonnet-4-6) was used throughout this project as a coding ass
 - **What we modified**: every generated component was reviewed, often substantially reworked (e.g., the transformer attention was rewritten after Claude's first version produced NaN gradients), and integrated into the broader system I designed.
 - **What we debugged**: training instability across all three PPO architectures required iterative diagnosis using training curves — identifying residual connections as missing, dropout as harmful inside message-passing, and LR as too high. These conclusions came from reading training curves and reasoning about gradient flow, not from Claude's suggestions alone.
 - **What we designed end-to-end**: the graph observation format, the custom MuJoCo environment with domain randomization, the reward function, the OOD evaluation methodology, and the overall research framing (GNN generalization across variable pendulum configurations).
+
+
+## Repository maintenance
+
+The repository cleanup used OpenAI Codex for documentation, generated-artifact
+removal, shared PPO utilities, mechanics and controller corrections, regression
+tests, and CI configuration. This maintenance does not change the original
+component ownership above or imply that new benchmark results were reproduced.

@@ -178,6 +178,10 @@ def train(cfg, policy_name: str, show_plot: bool = True,
         frame_skip      = env_cfg["frame_skip"],
         max_episode_steps=env_cfg["max_episode_steps"],
         termination_angle=env_cfg["termination_angle"],
+        angle_noise=cfg.get("init", {}).get("angle_noise", 0.05),
+        vel_noise=cfg.get("init", {}).get("vel_noise", 0.01),
+        reward_config=cfg.get("rewards", {}),
+        parameter_regions=env_cfg.get("parameter_regions"),
         max_links       =env_cfg.get("max_links"),
     )
 
@@ -262,7 +266,7 @@ def train(cfg, policy_name: str, show_plot: bool = True,
             ep_count += 1
             ep_rewards.append(ep_reward)
             ep_lengths.append(ep_length)
-            ep_wins.append(1 if ep_length >= max_ep_steps else 0)  # survived = win
+            ep_wins.append(int(truncated and not terminated))  # survived = win
             ep_reward = 0.0
             ep_length = 0
 

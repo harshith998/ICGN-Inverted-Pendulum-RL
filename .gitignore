@@ -1,29 +1,31 @@
-# Python
+# Python and development tools
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
 *.egg-info/
 dist/
 build/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Virtual environments
+# Local environments (env/ is the simulation source package)
 venv/
 .venv/
 env/bin/
 env/lib/
-
-# Jupyter
 .ipynb_checkpoints/
 
-# Training artifacts
+# Reproducible experiment output
 checkpoints/
 runs/
 logs/
 eval/results/
-eval/plots/*test4*.png
+eval/plots/
+eval/cache/
 *.pt
 *.pth
 
-# OS
+# Local machine files
 .DS_Store
+.env

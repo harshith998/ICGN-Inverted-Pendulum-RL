@@ -44,18 +44,18 @@ except ImportError:
 # ── Job definitions ────────────────────────────────────────────────────────────
 
 JOBS = [
-    {"name": "ppo_mlp",             "cmd": ["python3.12", "-u", "training/train_ppo.py",  "--policy", "mlp"]},
-    {"name": "ppo_gnn_mpnn",        "cmd": ["python3.12", "-u", "training/train_ppo.py",  "--policy", "gnn_mpnn"]},
-    {"name": "ppo_gnn_transformer", "cmd": ["python3.12", "-u", "training/train_ppo.py",  "--policy", "gnn_transformer"]},
-    {"name": "dqn_mlp",             "cmd": ["python3.12", "-u", "training/train_dqn.py",  "--policy", "mlp"]},
-    {"name": "dqn_gnn",             "cmd": ["python3.12", "-u", "training/train_dqn.py",  "--policy", "gnn"]},
-    {"name": "cgat_base",           "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "base"]},
-    {"name": "cgat_perhead",        "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "perhead"]},
-    {"name": "cgat_directional",    "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "directional"]},
-    {"name": "cgat_gravity",        "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "gravity"]},
-    {"name": "cgat_perc",           "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "perc"]},
-    {"name": "cgat_no_physics",     "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "no_physics"]},
-    {"name": "cgat_shuffled",       "cmd": ["python3.12", "-u", "training/train_cgat.py", "--variant", "shuffled"]},
+    {"name": "ppo_mlp",             "cmd": [sys.executable, "-u", "training/train_ppo.py",  "--policy", "mlp"]},
+    {"name": "ppo_gnn_mpnn",        "cmd": [sys.executable, "-u", "training/train_ppo.py",  "--policy", "gnn_mpnn"]},
+    {"name": "ppo_gnn_transformer", "cmd": [sys.executable, "-u", "training/train_ppo.py",  "--policy", "gnn_transformer"]},
+    {"name": "dqn_mlp",             "cmd": [sys.executable, "-u", "training/train_dqn.py",  "--policy", "mlp"]},
+    {"name": "dqn_gnn",             "cmd": [sys.executable, "-u", "training/train_dqn.py",  "--policy", "gnn"]},
+    {"name": "cgat_base",           "cmd": [sys.executable, "-u", "training/train_cgat.py", "--variant", "base"]},
+    {"name": "cgat_perhead",        "cmd": [sys.executable, "-u", "training/train_cgat.py", "--variant", "perhead"]},
+    {"name": "cgat_directional",    "cmd": [sys.executable, "-u", "training/train_cgat.py", "--variant", "directional"]},
+    {"name": "cgat_gravity",        "cmd": [sys.executable, "-u", "training/train_cgat.py", "--variant", "gravity"]},
+    {"name": "cgat_perc",           "cmd": [sys.executable, "-u", "training/train_cgat.py", "--variant", "perc"]},
+    {"name": "cgat_no_physics",     "cmd": [sys.executable, "-u", "training/train_cgat.py", "--variant", "no_physics"]},
+    {"name": "cgat_shuffled",       "cmd": [sys.executable, "-u", "training/train_cgat.py", "--variant", "shuffled"]},
 ]
 
 STEP_RE = re.compile(r"step\s+(\d+)")

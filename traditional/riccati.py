@@ -28,6 +28,8 @@ def solve_discrete_riccati_iteration(
     raise RuntimeError("Riccati iteration did not converge")
 
 
-def lqr_gain(ad: np.ndarray, bd: np.ndarray, p: np.ndarray, r: np.ndarray) -> np.ndarray:
+def lqr_gain(
+    ad: np.ndarray, bd: np.ndarray, p: np.ndarray, r: np.ndarray
+) -> np.ndarray:
     """Return K for u = -Kx using the converged Riccati matrix P."""
     return np.linalg.solve(r + bd.T @ p @ bd, bd.T @ p @ ad)

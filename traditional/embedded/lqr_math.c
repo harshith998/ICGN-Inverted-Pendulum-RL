@@ -70,7 +70,10 @@ static void build_mass_matrix(float m[NQ][NQ])
         float jv[NQ] = {0.0f};
         jv[0] = 1.0f;
         for (int r = 0; r <= i; ++r) {
-            jv[r + 1] = (r < i) ? LINK_LENGTH_M[r] : 0.5f * LINK_LENGTH_M[i];
+            jv[r + 1] = 0.5f * LINK_LENGTH_M[i];
+            for (int segment = r; segment < i; ++segment) {
+                jv[r + 1] += LINK_LENGTH_M[segment];
+            }
         }
 
         for (int r = 0; r < NQ; ++r) {
@@ -166,10 +169,13 @@ void lqr_build_model(float ad[NX][NX], float bd[NX])
 
 bool lqr_solve_gain(const float ad[NX][NX], const float bd[NX], float k[NX])
 {
-    float q[NX][NX] = {{0.0f}};
-    float p[NX][NX] = {{0.0f}};
-    float p_next[NX][NX] = {{0.0f}};
-    float r = 1.0f / (MAX_LQR_FORCE_N * MAX_LQR_FORCE_N);
+    /* Solve once in double precision: float roundoff can exceed the
+     * Riccati stopping tolerance for this poorly conditioned model.
+     * The real-time gain/state interface remains float. */
+    double q[NX][NX] = {{0.0f}};
+    double p[NX][NX] = {{0.0f}};
+    double p_next[NX][NX] = {{0.0f}};
+    double r = 1.0f / (MAX_LQR_FORCE_N * MAX_LQR_FORCE_N);
 
     for (int i = 0; i < NX; ++i) {
         q[i][i] = 1.0f / (MAX_STATE[i] * MAX_STATE[i]);
@@ -177,19 +183,19 @@ bool lqr_solve_gain(const float ad[NX][NX], const float bd[NX], float k[NX])
     }
 
     for (int iter = 0; iter < RICCATI_MAX_ITERS; ++iter) {
-        float pb[NX] = {0.0f};
+        double pb[NX] = {0.0f};
         for (int i = 0; i < NX; ++i) {
             for (int j = 0; j < NX; ++j) {
                 pb[i] += p[i][j] * bd[j];
             }
         }
 
-        float denom = r;
+        double denom = r;
         for (int i = 0; i < NX; ++i) {
             denom += bd[i] * pb[i];
         }
 
-        float bpa[NX] = {0.0f};
+        double bpa[NX] = {0.0f};
         for (int c = 0; c < NX; ++c) {
             for (int i = 0; i < NX; ++i) {
                 bpa[c] += pb[i] * ad[i][c];
@@ -198,7 +204,7 @@ bool lqr_solve_gain(const float ad[NX][NX], const float bd[NX], float k[NX])
 
         for (int r_i = 0; r_i < NX; ++r_i) {
             for (int c_i = 0; c_i < NX; ++c_i) {
-                float atpa = 0.0f;
+                double atpa = 0.0f;
                 for (int i = 0; i < NX; ++i) {
                     for (int j = 0; j < NX; ++j) {
                         atpa += ad[i][r_i] * p[i][j] * ad[j][c_i];
@@ -208,29 +214,29 @@ bool lqr_solve_gain(const float ad[NX][NX], const float bd[NX], float k[NX])
             }
         }
 
-        float diff = 0.0f;
+        double diff = 0.0f;
         for (int r_i = 0; r_i < NX; ++r_i) {
             for (int c_i = 0; c_i < NX; ++c_i) {
-                float sym = 0.5f * (p_next[r_i][c_i] + p_next[c_i][r_i]);
-                float d = sym - p[r_i][c_i];
+                double sym = 0.5f * (p_next[r_i][c_i] + p_next[c_i][r_i]);
+                double d = sym - p[r_i][c_i];
                 diff += d * d;
                 p[r_i][c_i] = sym;
             }
         }
 
-        if (sqrtf(diff) < RICCATI_TOLERANCE) {
-            float pb_final[NX] = {0.0f};
+        if (sqrt(diff) < RICCATI_TOLERANCE) {
+            double pb_final[NX] = {0.0f};
             for (int i = 0; i < NX; ++i) {
                 for (int j = 0; j < NX; ++j) {
                     pb_final[i] += p[i][j] * bd[j];
                 }
             }
-            float denom_final = r;
+            double denom_final = r;
             for (int i = 0; i < NX; ++i) {
                 denom_final += bd[i] * pb_final[i];
             }
             for (int c = 0; c < NX; ++c) {
-                float num = 0.0f;
+                double num = 0.0f;
                 for (int i = 0; i < NX; ++i) {
                     num += pb_final[i] * ad[i][c];
                 }

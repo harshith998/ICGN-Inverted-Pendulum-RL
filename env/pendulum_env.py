@@ -1,7 +1,7 @@
 """
 Variable inverted pendulum Gymnasium environment.
 
-Each episode, PendulumConfig is sampled (n_links, lengths, masses, masses, cart_mass).
+Each episode, PendulumConfig is sampled (n_links, lengths, masses, cart_mass).
 
 Observation space (Dict)
 ------------------------
@@ -9,13 +9,13 @@ All arrays are padded to max_links + 1 nodes (cart + max_links joints) and
  2 * max_links edges (bidirectional for each link)
 
 NODES:
-  [is_cart, is_joint, is_end, sin_theta, cos_theta, angular velocity, x, xvecloicty]
-  Cart node  : [1, 0, 0, 0, 0, 0, x_cart, xdot_cart]
-  Joint node : [0, 1, 0, sin(θ), cos(θ), θ̇, 0, 0]
-  End node   : [0, 0, 1, sin(θ), cos(θ), θ̇, 0, 0]
+  [is_cart, is_joint, is_end, sin_theta, cos_theta, angular velocity, x, x_velocity, cart_mass]
+  Cart node  : [1, 0, 0, 0, 0, 0, x_cart, xdot_cart, cart_mass]
+  Joint node : [0, 1, 0, sin(θ), cos(θ), θ̇, 0, 0, 0]
+  End node   : [0, 0, 1, sin(θ), cos(θ), θ̇, 0, 0, 0]
 
 EDGES:
-[length_m, mass_kg]
+[normalized_length, normalized_mass]
 
 Action space
 ------------
@@ -24,7 +24,6 @@ Action space
 
 from __future__ import annotations
 
-import time
 import numpy as np
 import mujoco
 import gymnasium
@@ -36,7 +35,7 @@ from graph.graph_builder import build_graph, NODE_FEAT_DIM, EDGE_FEAT_DIM
 
 
 class VariablePendulumEnv(gymnasium.Env):
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
+    metadata = {"render_modes": ["human"], "render_fps": 50}
 
     def __init__(
         self,
@@ -75,6 +74,8 @@ class VariablePendulumEnv(gymnasium.Env):
         self.vel_noise = vel_noise
         self.reward_config = reward_config or {}
         self.parameter_regions = parameter_regions or []
+        if render_mode not in (None, "human"):
+            raise ValueError("render_mode must be None or human")
         self.render_mode = render_mode
 
         self.max_links = max_links if max_links is not None else n_links_range[1]
@@ -108,7 +109,7 @@ class VariablePendulumEnv(gymnasium.Env):
                 shape=(2, self._max_edges), dtype=np.int64,
             ),
             "edge_features": spaces.Box(
-                low=0.0, high=np.inf,
+                low=-np.inf, high=np.inf,
                 shape=(self._max_edges, EDGE_FEAT_DIM), dtype=np.float32,
             ),
             #we pad to set max, below are lengths of actual inputs so we take out paddings right before
@@ -132,6 +133,11 @@ class VariablePendulumEnv(gymnasium.Env):
         return obs, info
 
     def step(self, action: np.ndarray):
+        if self._mj_data is None:
+            raise RuntimeError("Call reset() before step().")
+        action = np.asarray(action, dtype=np.float32)
+        if action.shape != (1,) or not np.isfinite(action).all():
+            raise ValueError("action must contain one finite force")
         action = np.clip(action, -self.max_force, self.max_force)
         self._mj_data.ctrl[0] = float(action[0])
 
@@ -164,7 +170,7 @@ class VariablePendulumEnv(gymnasium.Env):
             reward -= failure_penalty
             reward_info["failure_penalty"] = -failure_penalty
 
-        if truncated:
+        if truncated and not terminated:
             reward += 2.0
             reward_info["win_bonus"] = 2.0
 
@@ -224,6 +230,11 @@ class VariablePendulumEnv(gymnasium.Env):
         return self.parameter_regions[idx]
 
     def _load_model(self, config: PendulumConfig):
+        if config.n_links > self.max_links:
+            raise ValueError("sampled topology exceeds max_links")
+        if self._viewer is not None:
+            self._viewer.close()
+            self._viewer = None
         xml = build_mjcf(config, rail_limit=self.rail_limit, max_force=self.max_force, timestep=self.timestep)
         self._mj_model = mujoco.MjModel.from_xml_string(xml)
         self._mj_data = mujoco.MjData(self._mj_model)

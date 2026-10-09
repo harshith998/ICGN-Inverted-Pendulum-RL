@@ -36,6 +36,9 @@ static void sensors_to_q(const RobotSensors *sensors, float q[NQ])
 
 static bool state_is_safe(const RobotSensors *sensors, const float x[NX])
 {
+    for (int i = 0; i < NX; ++i) {
+        if (!isfinite(x[i])) return false;
+    }
     if (!sensors->estop_ok) return false;
     if (sensors->left_limit_active || sensors->right_limit_active) return false;
     if (fabsf(x[0]) > RAIL_LIMIT_M) return false;
@@ -66,6 +69,12 @@ bool robot_controller_tick(
     float *pwm
 )
 {
+    *force_n = 0.0f;
+    *pwm = 0.0f;
+    if (!isfinite(dt_s) || dt_s <= 0.0f || dt_s > 0.05f) return false;
+    for (int i = 0; i < NX; ++i) {
+        if (!isfinite(controller->k[i])) return false;
+    }
     float q[NQ];
     sensors_to_q(sensors, q);
 
@@ -94,6 +103,10 @@ bool robot_controller_tick(
     }
 
     *force_n = lqr_force_command(controller->k, controller->x);
+    if (!isfinite(*force_n)) {
+        *force_n = 0.0f;
+        return false;
+    }
     *pwm = clamp((*force_n) * PWM_PER_NEWTON, -MAX_PWM_ABS, MAX_PWM_ABS);
 
     if (sensors->left_limit_active && *pwm < 0.0f) *pwm = 0.0f;

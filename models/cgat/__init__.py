@@ -1,9 +1,9 @@
 """
-CGAT model variants — all share the same graph obs space and param count (±2 scalars).
+CGAT model variants — share a graph observation interface; parameter counts vary by architecture.
 
 Variants
 --------
-  base        — scalar β·M̃ per layer  (current best)
+  base        — scalar β·M̃ per layer  (reference variant)
   perhead     — per-head β·M̃  (one scalar per attention head)
   directional — β_fwd/β_bwd  (separate scales for root→leaf / leaf→root edges)
   gravity     — scalar β·M̃  +  gravity torque injected into node embeddings

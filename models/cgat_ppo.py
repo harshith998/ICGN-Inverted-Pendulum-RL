@@ -1,9 +1,9 @@
-# Run (via training/train_cgat.py): python3.12 training/train_cgat.py --policy cgat
+# Legacy model class; current training uses models/cgat/ via --variant base.
 
 """
 Coupled Graph Attention Transformer (CGAT) — actor-critic for PPO.
 
-Novel component (operating on the same observations as GNNTransformerPPO):
+Architecture component (operating on the same observations as GNNTransformerPPO):
 
   Inertia-Coupled Graph Attention (ICGA)
   ───────────────────────────────────────
@@ -46,102 +46,7 @@ _ANG_VEL         = 10.0                            # θ̇  normalisation
 # Physics helpers  (pure functions, no learned parameters)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _rod_tensors(obs: dict):
-    """
-    Extract per-rod (L, m, sin_th, cos_th, theta_dot) and a validity mask.
-    Rod i ↔ forward edge 2*i (same features as backward edge 2*i+1).
-
-    Returns
-    -------
-    L, m, sin_th, cos_th, theta_dot : each (B, max_links)
-    rod_valid                        : (B, max_links) bool
-    """
-    node_feats = obs["node_features"].float()   # (B, max_nodes, 9)
-    edge_feats = obs["edge_features"].float()   # (B, max_edges, 2)
-    n_nodes    = obs["n_nodes"].long()           # (B, 1)
-
-    B, max_nodes, _ = node_feats.shape
-    max_links = max_nodes - 1
-    device    = node_feats.device
-
-    # Forward edges are at even positions 0, 2, 4, …
-    rod_ef    = edge_feats[:, 0::2, :]           # (B, max_links, 2)
-    L         = rod_ef[..., 0] * _LEN_RANGE  + _LEN_MIN
-    m         = rod_ef[..., 1] * _MASS_RANGE + _MASS_MIN
-
-    n_links   = n_nodes.squeeze(-1) - 1         # (B,)
-    rod_valid = (torch.arange(max_links, device=device)
-                 .unsqueeze(0) < n_links.unsqueeze(1))   # (B, max_links) bool
-
-    L = L * rod_valid.float()
-    m = m * rod_valid.float()
-
-    sin_th    = node_feats[:, 1:, 3]            # (B, max_links)
-    cos_th    = node_feats[:, 1:, 4]            # (B, max_links)
-    theta_dot = node_feats[:, 1:, 5] * _ANG_VEL  # (B, max_links)
-
-    return L, m, sin_th, cos_th, theta_dot, rod_valid
-
-
-def compute_inertia_coupling(obs: dict) -> torch.Tensor:
-    """
-    Analytically compute the normalised Lagrangian mass matrix M̃(q).
-
-    Entry M̃ᵢⱼ = Mᵢⱼ / √(Mᵢᵢ · Mⱼⱼ) ∈ [-1, 1].
-    Node ordering: 0 = cart, 1..n_links = joints.
-
-    Derivation (row i, col j with q = [x, θ₁, …, θₙ]):
-      M_{0j} = Lⱼ cos(θⱼ) · [Σₖ≥ⱼ mₖ  − mⱼ/2]
-      M_{jj} = Lⱼ² · [mⱼ/3 + Σₖ>ⱼ mₖ]
-      M_{jk} = Lⱼ Lₖ cos(θⱼ−θₖ) · [Σₖ'≥ₖ mₖ' − mₖ/2]   (j < k)
-
-    Returns
-    -------
-    M_tilde : (B, max_nodes, max_nodes) float32
-    """
-    L, m, sin_th, cos_th, _, rod_valid = _rod_tensors(obs)
-    B = L.shape[0]
-    max_links = L.shape[1]
-    max_nodes = max_links + 1
-    device    = L.device
-
-    # Exact cart mass from node feature 8 (observed, no longer estimated)
-    node_feats = obs["node_features"].float()
-    m_cart = node_feats[:, 0, 8] * _CART_MASS_RANGE + _CART_MASS_MIN  # (B,)
-
-    # Distal mass sums: distal[:, j] = Σₖ≥ⱼ m[:,k]
-    distal     = torch.flip(torch.cumsum(torch.flip(m, [1]), 1), [1])  # (B, max_links)
-    distal_excl = distal - m                                            # Σₖ>ⱼ mₖ
-
-    M = torch.zeros(B, max_nodes, max_nodes, device=device)
-
-    # M[0,0]
-    M[:, 0, 0] = m_cart + m.sum(dim=1)
-
-    # M[0,j] = M[j,0]
-    M_0j = L * cos_th * (distal - m / 2) * rod_valid.float()   # (B, max_links)
-    M[:, 0, 1:] = M_0j
-    M[:, 1:, 0] = M_0j
-
-    # M[j,j] diagonal
-    M_diag = L ** 2 * (m / 3 + distal_excl) * rod_valid.float()
-    for j in range(max_links):
-        M[:, j + 1, j + 1] = M_diag[:, j]
-
-    # M[j,k] off-diagonal  (j < k)
-    for j in range(max_links):
-        for k in range(j + 1, max_links):
-            cos_jk = cos_th[:, j] * cos_th[:, k] + sin_th[:, j] * sin_th[:, k]
-            M_jk   = L[:, j] * L[:, k] * cos_jk * (distal[:, k] - m[:, k] / 2)
-            valid  = (rod_valid[:, j] & rod_valid[:, k]).float()
-            M_jk   = M_jk * valid
-            M[:, j + 1, k + 1] = M_jk
-            M[:, k + 1, j + 1] = M_jk
-
-    # Normalise: M̃ᵢⱼ = Mᵢⱼ / √(Mᵢᵢ Mⱼⱼ)
-    diag_sqrt = M.diagonal(dim1=-2, dim2=-1).clamp(min=1e-6).sqrt()  # (B, max_nodes)
-    denom     = (diag_sqrt.unsqueeze(-1) * diag_sqrt.unsqueeze(-2)).clamp(min=1e-6)
-    return M / denom                                                   # (B, max_nodes, max_nodes)
+from models.cgat._physics import compute_inertia_coupling
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

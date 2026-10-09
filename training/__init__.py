@@ -1,2 +1,1 @@
-# Training loop and PPO/SAC integration will live here.
-# Populated once the environment and model are validated.
+"""DQN, PPO, and physics-informed graph-policy training entry points."""

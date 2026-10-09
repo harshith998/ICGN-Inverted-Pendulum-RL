@@ -41,8 +41,12 @@ def _rod_tensors(obs: dict):
     L = L * rod_valid.float()
     m = m * rod_valid.float()
 
-    sin_th    = node_feats[:, 1:, 3]
-    cos_th    = node_feats[:, 1:, 4]
+    # MuJoCo observations contain relative hinge angles. Analytic rod
+    # geometry uses absolute orientations, obtained by cumulative summation.
+    relative = torch.atan2(node_feats[:, 1:, 3], node_feats[:, 1:, 4])
+    absolute = torch.cumsum(relative, dim=1)
+    sin_th = torch.sin(absolute)
+    cos_th = torch.cos(absolute)
     theta_dot = node_feats[:, 1:, 5] * _ANG_VEL
 
     return L, m, sin_th, cos_th, theta_dot, rod_valid
@@ -84,6 +88,10 @@ def compute_inertia_coupling(obs: dict) -> torch.Tensor:
             valid  = (rod_valid[:, j] & rod_valid[:, k]).float()
             M[:, j+1, k+1] = M[:, k+1, j+1] = M_jk * valid
 
+    # q_absolute = T q_relative, so M_relative = T.T M_absolute T.
+    transform = torch.eye(max_nodes, device=device, dtype=M.dtype)
+    transform[1:, 1:] = torch.tril(torch.ones(max_links, max_links, device=device))
+    M = transform.T @ M @ transform
     diag_sqrt = M.diagonal(dim1=-2, dim2=-1).clamp(min=1e-6).sqrt()
     denom     = (diag_sqrt.unsqueeze(-1) * diag_sqrt.unsqueeze(-2)).clamp(min=1e-6)
     return M / denom
@@ -101,7 +109,9 @@ def compute_gravity_torques(obs: dict) -> torch.Tensor:
 
     distal = torch.flip(torch.cumsum(torch.flip(m, [1]), 1), [1])
     tau    = _G * L * sin_th * (distal - m / 2) * rod_valid.float()
-    tau    = tau / _G_TORQUE_SCALE
+    # A relative hinge rotates every downstream rod.
+    tau = torch.flip(torch.cumsum(torch.flip(tau, [1]), 1), [1])
+    tau = tau / _G_TORQUE_SCALE
 
     cart_zeros = torch.zeros(B, 1, device=device)
     return torch.cat([cart_zeros, tau], dim=1)   # (B, max_nodes)
@@ -110,7 +120,7 @@ def compute_gravity_torques(obs: dict) -> torch.Tensor:
 def compute_hamiltonian(obs: dict) -> torch.Tensor:
     """
     Analytically compute normalised potential energy V_pot / H_scale.
-    Returns (B,) — always positive, maximum when all links upright.
+    Returns (B,) — maximum when all links are upright; may be negative.
     """
     L, m, _, cos_th, _, rod_valid = _rod_tensors(obs)
     rv        = rod_valid.float()

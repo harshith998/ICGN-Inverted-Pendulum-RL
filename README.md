@@ -1,129 +1,81 @@
-# GNN-RL Inverted Pendulum
+# Inverted Pendulum Control · Graph RL & Embedded LQR
 
-## What it Does / Goal
+**Learning to balance changing mechanical systems, from MuJoCo simulation to a physical three-link controller.**
 
-This project trains reinforcement learning agents to balance a variable inverted pendulum — a cart-pole system where the number of links, their lengths, and their masses all change between episodes. Rather than encoding the physical state as a flat vector (which would break when the topology changes), the system represents the pendulum as a graph: cart and joints are nodes, rods are edges carrying physical parameters (length, mass). A Graph Neural Network (GNN) encoder reads this graph and produces a fixed-size embedding regardless of how many links are present, enabling a single trained model to generalize zero-shot to pendulum configurations it has never seen — including out-of-distribution lengths and masses. Two GNN architectures are compared (message-passing MPNN and graph-attention transformer) against flat MLP baselines, under both DQN (discrete, off-policy) and PPO (continuous, on-policy) training regimes.
+This project explores whether graph-structured reinforcement learning policies can adapt to changes in pendulum length, mass, and link count. It combines a custom simulator, DQN and PPO baselines, physics-informed graph attention, an out-of-distribution evaluation suite, and a separate LQR control stack for an STM32-based cart-pendulum prototype.
 
----
+[Demo video](https://youtu.be/ukRrmbrJezs) · [Technical walkthrough](https://youtu.be/omyPsI9fVvs) · [Architecture](docs/ARCHITECTURE.md) · [Setup & experiments](SETUP.md) · [Physical controller](traditional/README.md)
 
-## Research Context
+## Engineering highlights
 
-Inverted pendulum control is one of the oldest benchmarks in reinforcement learning. Barto, Sutton & Anderson (1983) first demonstrated a neural network learning to balance a cart-pole from scratch. Since then, deep RL methods — DQN (Mnih et al., 2015) and PPO (Schulman et al., 2017) — have been widely applied to pendulum variants, consistently achieving near-perfect balance. However, **all prior pendulum RL work assumes fixed, known physical parameters**: a single link length and mass set at the start, unchanged across all episodes. A controller trained on one configuration cannot transfer to another without retraining.
+- **Variable-topology simulation:** generate MuJoCo models at episode reset, randomizing link count, rod dimensions, and cart mass.
+- **Graph observations:** encode the cart and joints as nodes, with bidirectional edges carrying link geometry and mass. Padding and masks support batches of different chain lengths.
+- **Physics-informed policies:** coupled graph attention (CGAT) adds an analytic inertia-coupling bias to learned attention, with gravity and energy-based variants and matched ablations.
+- **Controlled comparisons:** MLP, message-passing GNN, and graph-transformer policies share DQN or PPO training paths; evaluations sweep physical parameters and topology.
+- **Physical control implementation:** derive multi-link dynamics, solve the discrete Riccati equation, convert encoder counts into state, and apply bounded force/PWM commands with fault checks. Python and portable C implementations are included.
 
-Separately, Wang et al. (2018) introduced **NerveNet**, which applied Graph Neural Networks to multi-body locomotion control (ant, cheetah, humanoid robots), showing that GNNs can generalize across different robot *morphologies* (structural changes). NerveNet's setting is fundamentally different from ours: it targets complex locomotion across entirely different robot bodies, not the controlled OOD analysis of physical parameters within a single system type. The locomotion complexity also makes isolating what the model has actually learned difficult.
+## System overview
 
-**This project sits at the intersection:** we apply graph-structured encoding to the classical pendulum setting, but with *variable physical parameters* (link lengths and masses sampled fresh each episode). A single model must balance pendulums it has never seen. This setup is novel in two ways: (1) no prior pendulum RL work trains a single model across variable configurations, and (2) the simplicity of the pendulum — relative to NerveNet's locomotion robots — enables rigorous, interpretable OOD analysis: we can sweep a single physical parameter and measure exactly how far outside training distribution the model remains effective.
-
-**References**
-- Barto, Sutton & Anderson (1983). *Neuronlike adaptive elements that can solve difficult learning control problems.* IEEE SMC.
-- Mnih et al. (2015). *Human-level control through deep reinforcement learning.* Nature.
-- Schulman et al. (2017). *Proximal Policy Optimization Algorithms.* arXiv:1707.06347.
-- Wang et al. (2018). *NerveNet: Learning Structured Policy with Graph Neural Networks.* ICLR.
-
----
-
-## Quick Start
-more detailed start in setup.md
-
-```bash
-# 1. Clone and set up environment
-git clone <repo-url>
-cd Inverted_Pendulum_RL
-python3.12 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# 2. Train
-python3.12 training/train_dqn.py --policy gnn          # GNN DQN
-python3.12 training/train_dqn.py --policy mlp          # MLP DQN baseline
-python3.12 training/train_ppo.py --policy gnn_mpnn     # GNN MPNN PPO
-python3.12 training/train_ppo.py --policy gnn_transformer  # GNN Transformer PPO
-python3.12 training/train_ppo.py --policy mlp          # MLP PPO baseline
-
-# 3. Evaluate (OOD generalization sweeps)
-python3.12 eval/eval_dqn.py --policy gnn
-python3.12 eval/eval_ppo.py --policy gnn_mpnn
-
-# 4. Hyperparameter ablation
-python3.12 training/ablation_ppo.py --policy gnn_mpnn --sweep lr
-python3.12 training/ablation_ppo.py --policy gnn_mpnn --sweep all
-
-# 5. Physics validation
-python3.12 tests/test_physics.py
+```mermaid
+flowchart LR
+    Config[YAML configuration] --> Sim[MuJoCo / Gymnasium]
+    Sim --> Graph[Graph observations]
+    Graph --> Policy[MLP / GNN / CGAT]
+    Policy --> Force[Cart force]
+    Force --> Sim
+    Policy --> Eval[Parameter and topology evaluation]
+    Enc[Physical encoders] --> State[Calibration and state estimation]
+    State --> LQR[LQR and safety checks]
+    LQR --> Motor[STM32 / motor driver]
 ```
 
-All hyperparameters are controlled from `configs/default.yaml`. Checkpoints are saved to `checkpoints/`, training curves to `checkpoints/*.png`, and eval plots to `eval/plots/`.
+The simulation and physical-control paths share mechanical concepts but are separate implementations. Deployment of an RL policy to the real robot is not implemented here.
 
----
+## Run it locally
 
-## Video Links
+Python 3.12 is the tested interpreter. The checks and short training run work on CPU without a display or robot.
 
-| Video | Link |
+```bash
+git clone https://github.com/harshith998/ICGN-Inverted-Pendulum-RL.git
+cd ICGN-Inverted-Pendulum-RL
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+
+# Numerical physics, policy gradients, training math, and controller checks
+python -m pytest -q
+
+# Short workflow check; not a trained performance benchmark
+MPLBACKEND=Agg python -m training.train_cgat \
+  --config configs/smoke.yaml --variant base --seed 42 --no-show
+```
+
+For full training, use `configs/default.yaml` or `configs/cgat_3link.yaml`. See [SETUP.md](SETUP.md) for model selection, evaluation, optional visualization, and hardware setup.
+
+## Code map
+
+| Location | Responsibility |
 |---|---|
-| Demo (non-technical) | https://youtu.be/ukRrmbrJezs |
-| Technical Walkthrough | https://youtu.be/omyPsI9fVvs |
+| [`env/`](env/) | MJCF generation, domain randomization, rewards, Gymnasium interface |
+| [`graph/`](graph/) | Physical state → normalized graph features |
+| [`models/`](models/) | DQN/PPO policies and CGAT variants |
+| [`training/`](training/) | Training entry points and shared PPO utilities |
+| [`eval/`](eval/) | Parameter sweeps, topology tests, adaptation, experiment analysis |
+| [`benchmarks/`](benchmarks/) | Reusable task definitions and reference-normalized metrics |
+| [`traditional/`](traditional/) | Physical-model LQR, serial interface, STM32 C control core |
+| [`configs/`](configs/) | Main configurations; research variants in `experiments/` |
+| [`tests/`](tests/) | Numerical and behavioral regression tests |
 
----
+For a focused review, start with [`env/pendulum_env.py`](env/pendulum_env.py), [`graph/graph_builder.py`](graph/graph_builder.py), [`models/cgat/_physics.py`](models/cgat/_physics.py), and [`traditional/model.py`](traditional/model.py).
 
-## Evaluation
+## Scope and evidence
 
-All models trained for 2,000,000 environment steps. Evaluation uses 100 evenly-spaced parameter values × 200 episodes per point, extending ±100% beyond the training distribution on each axis.
+The default training distribution covers **1–3 links**, link lengths **0.3–1.2 m**, link masses **0.1–2.0 kg**, and cart masses **0.5–3.0 kg**. Its 1–3-link topology sweep is an in-distribution comparison; it does not establish transfer to unseen topologies. Graph encoders support variable graph sizes, while fixed-capacity MLP baselines depend on their configured padding size.
 
-### Training Curves
+Tests validate implementation behavior and numerical mechanics. Short smoke runs validate the training pipeline; they do not establish a model ranking or control success rate. Generated plots, caches, raw results, and checkpoints are intentionally excluded from version control. The repository makes no quantitative performance or research-priority claims without reproducible supporting measurements.
 
-| Model | Curve |
-|---|---|
-| GNN DQN | `checkpoints/gnn_dqn_training_curve.png` |
-| MLP DQN | `checkpoints/mlp_dqn_training_curve.png` |
-| GNN MPNN PPO | `checkpoints/gnn_mpnn_ppo_training_curve.png` |
-| GNN Transformer PPO | `checkpoints/gnn_transformer_ppo_training_curve.png` |
-| MLP PPO | `checkpoints/mlp_ppo_training_curve.png` |
+The physical controller is a **prototype**: calibration values are examples, board integration includes unfinished HAL hooks, and software tests do not establish real-robot stability. See the [hardware status and bring-up guide](traditional/README.md).
 
-### OOD Generalization — Link Length Sweep
+## Contributions
 
-| Model | Plot |
-|---|---|
-| GNN DQN | `eval/plots/gnn_dqn_link_length_sweep.png` |
-| MLP DQN | `eval/plots/mlp_dqn_link_length_sweep.png` |
-| GNN MPNN PPO | `eval/plots/gnn_mpnn_ppo_link_length_sweep.png` |
-
-### OOD Generalization — Link Mass Sweep
-
-| Model | Plot |
-|---|---|
-| GNN DQN | `eval/plots/gnn_dqn_link_mass_sweep.png` |
-| MLP DQN | `eval/plots/mlp_dqn_link_mass_sweep.png` |
-| GNN MPNN PPO | `eval/plots/gnn_mpnn_ppo_link_mass_sweep.png` |
-
-### OOD Heatmaps (Length × Mass)
-
-| Model | Plot |
-|---|---|
-| GNN DQN | `eval/plots/gnn_dqn_ood_heatmap.png` |
-| MLP DQN | `eval/plots/mlp_dqn_ood_heatmap.png` |
-| GNN MPNN PPO | `eval/plots/gnn_mpnn_ppo_ood_heatmap.png` |
-
-### Key Findings
-
-- **GNN DQN outperforms MLP DQN on OOD generalization** — the graph encoder maintains stable reward across parameter ranges the MLP cannot handle
-- **DQN outperforms PPO** on this task due to the replay buffer's variance reduction; PPO reaches comparable peak rewards but with higher volatility
-- **GNN MPNN and GNN Transformer are comparable in-distribution**; transformer shows stronger attention-weighted generalization on extreme OOD mass values
-- **MLP baselines degrade sharply OOD** — fixed input layout cannot adapt to unseen physical configurations
-
----
-
-## Individual Contributions
-
-**Harshith**
-- Custom MuJoCo environment with domain randomization (`env/`)
-- Graph observation encoding (`graph/`)
-- Full training infrastructure for DQN and PPO (`training/`)
-- GNN-Transformer architecture (`models/gnn_transformer_ppo.py`)
-- OOD evaluation suite (`eval/`)
-- Project configuration and structure
-
-**Rohan**
-- MLP policy implementations (notebooks, adapted into codebase by Harshith)
-- Base GNN message-passing experiments (notebooks, ported and extended by Harshith)
-
-See [ATTRIBUTION.md](ATTRIBUTION.md) for full detail including AI tool usage.
+**Harshith:** environment and graph representation, training/evaluation infrastructure, graph-transformer development, and integration of the research system. **Rohan:** initial MLP and GNN notebook experiments, subsequently adapted into this codebase. Detailed component ownership and AI-assistance disclosures are preserved in [ATTRIBUTION.md](ATTRIBUTION.md).

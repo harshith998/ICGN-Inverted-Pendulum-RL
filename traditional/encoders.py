@@ -23,12 +23,19 @@ def wrap_to_pi(angle_rad: np.ndarray) -> np.ndarray:
 
 
 def cart_count_to_meters(count: int, cal: EncoderCalibration) -> float:
-    return cal.cart_sign * (float(count - cal.cart_zero_count) / cal.cart_counts_per_meter)
+    return cal.cart_sign * (
+        float(count - cal.cart_zero_count) / cal.cart_counts_per_meter
+    )
 
 
 def joint_counts_to_radians(counts: np.ndarray, cal: EncoderCalibration) -> np.ndarray:
     counts = np.asarray(counts, dtype=float)
-    raw = cal.joint_signs * (counts - cal.joint_zero_counts) * TAU / cal.joint_counts_per_rev
+    raw = (
+        cal.joint_signs
+        * (counts - cal.joint_zero_counts)
+        * TAU
+        / cal.joint_counts_per_rev
+    )
     return wrap_to_pi(raw)
 
 
@@ -42,6 +49,10 @@ class FiniteDifferenceVelocity:
 
     def update(self, position: np.ndarray, time_s: float) -> np.ndarray:
         position = np.asarray(position, dtype=float)
+        if position.shape != (self._state_dim,) or not np.isfinite(position).all():
+            raise ValueError("position must be a finite state vector")
+        if not np.isfinite(time_s) or time_s < 0:
+            raise ValueError("sensor timestamp must be finite and nonnegative")
         if self._last_position is None or self._last_time_s is None:
             self._last_position = position.copy()
             self._last_time_s = time_s
@@ -49,7 +60,7 @@ class FiniteDifferenceVelocity:
 
         dt = time_s - self._last_time_s
         if dt <= 0.0:
-            return np.zeros(self._state_dim, dtype=float)
+            raise ValueError("sensor timestamps must increase strictly")
 
         delta = position - self._last_position
         delta[1:] = wrap_to_pi(delta[1:])

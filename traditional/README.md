@@ -1,50 +1,98 @@
-# Traditional LQR Controller
+# Physical three-link cart-pendulum controller
 
-This folder is for the real robotic cart + 3-link pendulum controller.
-It is not a simulator.
+This is the physical-control side of the project: a ground-up linear dynamics
+model and LQR controller, with Python serial control and a portable C core for
+an STM32 Nucleo F446RE / VNH5019 motor-driver prototype.
 
-The intended split is:
+**Status:** software prototype with example calibration values. The repository
+contains control mathematics and firmware integration templates, not a complete
+flashable CubeMX project or a verified hardware balancing demonstration. The RL
+policies in `models/` are not deployed by this controller.
 
-- STM32 Nucleo firmware reads encoders, drives the VNH5019 motor driver, checks
-  limit switches, and streams one sensor packet per control tick.
-- This Python controller computes the physical model, solves the discrete LQR
-  gain by Riccati iteration, checks safety limits, and sends a force command.
+## Two deployment paths
 
-The code is deliberately written without a black-box `lqr()` call. The only
-linear algebra primitive used for the gain is `numpy.linalg.solve`.
+| Path | Control responsibility | Status |
+|---|---|---|
+| Python + serial | STM32 streams encoders; Python estimates state and sends PWM | Implemented protocol boundary; needs board firmware and calibration |
+| On-board C | STM32 estimates state and computes LQR feedback locally | Portable math/controller core; HAL integration hooks are templates |
 
-## State Convention
+Both paths use a linearized uniform-rod model near the upright equilibrium.
+They do not provide swing-up or recovery from arbitrary initial positions.
 
-The controller state is:
+## State and model
 
 ```text
-[p, theta1, theta2, theta3, p_dot, theta1_dot, theta2_dot, theta3_dot]
+x = [p, theta1, theta2, theta3, p_dot, theta1_dot, theta2_dot, theta3_dot]
+u = -K x
 ```
 
-where the joint angles are relative encoder angles measured from the upright
-zero position.
+Angles are **relative joint angles** measured from upright encoder zeros.
+Absolute rod orientations are cumulative sums of the relative angles. A change
+in one hinge rotates every downstream segment; the mass matrix includes those
+contributions consistently in Python and C.
+
+The default period is 5 ms (200 Hz). `model.py` builds the upright mass/gravity
+matrices, discretizes with forward Euler, and constructs Bryson-rule Q/R weights.
+`riccati.py` solves the discrete Riccati equation by iteration using
+`numpy.linalg.solve`. Regression tests compare the result with SciPy's independent
+solver and check the closed-loop eigenvalues. The C implementation uses double
+precision for the one-time Riccati solve and float values in the control loop.
 
 ## Files
 
-- `config.yaml` - physical parameters, encoder calibration, LQR weights, safety
-  limits, and serial settings.
-- `model.py` - ground-up mass matrix, gravity stiffness matrix, continuous
-  state-space model, and Euler discretization.
-- `riccati.py` - discrete Riccati iteration and LQR gain computation.
-- `encoders.py` - count-to-position and count-to-angle conversion.
-- `hardware.py` - serial protocol boundary for the STM32/Nucleo.
-- `controller.py` - safety checks, state assembly, and force calculation.
-- `run_controller.py` - real-time control loop entry point.
-- `firmware_protocol.md` - packet format the STM32 firmware should implement.
+| File | Purpose |
+|---|---|
+| `config.yaml` | Example mechanical parameters, calibration, costs, and limits |
+| `model.py`, `riccati.py` | Mechanics and gain calculation |
+| `encoders.py` | Calibration, angle wrapping, timestamp-checked velocity estimation |
+| `controller.py` | State assembly, interlock checks, force/PWM saturation |
+| `hardware.py` | Validated sensor-packet parsing and serial commands |
+| `run_controller.py` | Python control-loop entry point |
+| `firmware_protocol.md` | Wire format and firmware watchdog requirements |
+| `embedded/` | Portable C math/control core and HAL integration notes |
+| `embedded/PIN_PLAN.md` | Proposed board/peripheral allocation |
+| `firmware_nucleo_f446re_skeleton.c` | Firmware skeleton requiring integration |
 
-## First Bring-Up Order
+## Software checks
 
-1. Run the motor with the pendulum removed and low PWM limits.
-2. Confirm cart encoder direction and meters-per-count.
-3. Confirm each joint encoder direction and zero offset.
-4. Confirm endstop polarity and emergency stop behavior.
-5. Run `run_controller.py --dry-run` to read sensors without commanding force.
-6. Enable low force limits first, then tune upward carefully.
+From the repository root:
 
-Do not close the LQR loop until encoder signs are verified. Wrong signs turn
-stabilizing feedback into destabilizing feedback.
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest tests/test_control.py tests/test_embedded.py -q
+python -m pip install -r requirements-hardware.txt
+python -m traditional.run_controller --help
+```
+
+The embedded tests use the host C compiler (`cc`) and skip if it is unavailable.
+They validate the portable core, not the STM32 toolchain, timing deadlines,
+peripheral configuration, wiring, or motor behavior.
+
+## Bring-up sequence
+
+1. Measure the actual masses, lengths, transmission ratio, and encoder resolution.
+   Update both `config.yaml` and `embedded/lqr_config.h` for the chosen path.
+2. Complete the firmware HAL hooks and independent e-stop, endstop, and
+   communication-timeout interlocks. Check the pin plan against the actual build.
+3. With the pendulum removed, verify motor direction using a conservative PWM limit.
+4. Verify cart/joint encoder signs, counts per unit, and upright zeros.
+5. Set the serial port and run sensor-only observation:
+
+   ```bash
+   python -m traditional.run_controller --config traditional/config.yaml --dry-run
+   ```
+
+   This requires live hardware. It sends zero PWM while displaying the calculated
+   force and PWM; it does not simulate packets.
+6. After interlocks and calibration are validated, enable the control loop with
+   conservative bounds and the pendulum near upright:
+
+   ```bash
+   python -m traditional.run_controller --config traditional/config.yaml
+   ```
+
+Wrong encoder signs destabilize feedback. The Python process cannot enforce a
+motor stop if the serial connection or host fails; the firmware watchdog and
+physical emergency stop must independently disable the drive. The PWM-to-force
+mapping is a calibration placeholder, and friction, backlash, latency, and motor
+dynamics are not identified by this model.

@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import time
 
 import numpy as np
 import yaml
 
-from controller import ActuatorCalibration, LQRRobotController, SafetyLimits
-from encoders import EncoderCalibration
-from hardware import SerialRobotIO
-from model import PhysicalParams, bryson_q_r, continuous_state_space, discretize_euler
-from riccati import lqr_gain, solve_discrete_riccati_iteration
+from traditional.controller import ActuatorCalibration, LQRRobotController, SafetyLimits
+from traditional.encoders import EncoderCalibration
+from traditional.hardware import SerialRobotIO
+from traditional.model import (
+    PhysicalParams,
+    bryson_q_r,
+    continuous_state_space,
+    discretize_euler,
+)
+from traditional.riccati import lqr_gain, solve_discrete_riccati_iteration
 
 
 def load_controller(config_path: str) -> LQRRobotController:
@@ -81,9 +92,15 @@ def load_controller(config_path: str) -> LQRRobotController:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run real-robot traditional LQR controller.")
+    parser = argparse.ArgumentParser(
+        description="Run real-robot traditional LQR controller."
+    )
     parser.add_argument("--config", default="traditional/config.yaml")
-    parser.add_argument("--dry-run", action="store_true", help="read sensors and print commands without sending PWM")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read sensors and print commands without sending PWM",
+    )
     args = parser.parse_args()
 
     with open(args.config, "r", encoding="utf-8") as f:
@@ -104,20 +121,23 @@ def main() -> None:
         while True:
             packet = io.read_sensor_packet()
             now = time.monotonic()
-            if now - last_packet_wall_time > float(safety_cfg["stale_packet_timeout_s"]):
+            if now - last_packet_wall_time > float(
+                safety_cfg["stale_packet_timeout_s"]
+            ):
                 raise RuntimeError("sensor stream went stale")
             last_packet_wall_time = now
 
             state, force, pwm = controller.command_from_packet(packet)
             if args.dry_run:
                 io.command_pwm(0.0)
-                print(f"x={np.array2string(state, precision=4)} force={force:+.3f}N pwm={pwm:+.3f}")
+                print(
+                    f"x={np.array2string(state, precision=4)} force={force:+.3f}N pwm={pwm:+.3f}"
+                )
             else:
                 io.command_pwm(pwm)
     except KeyboardInterrupt:
         print("stopping")
     finally:
-        io.stop()
         io.close()
 
 

@@ -1,166 +1,87 @@
-# Setup Instructions
+# Setup and reproducible runs
 
-## Requirements
+Run commands from the repository root. Python 3.12 is tested; CPU execution is sufficient for tests and smoke runs. Full multi-seed experiments take substantially longer.
 
-- Python 3.12
-- macOS or Linux (MuJoCo works on both; Windows is untested)
-- ~2 GB disk space for dependencies and checkpoints
-- GPU optional — training runs on CPU but is significantly faster with CUDA
-
----
-
-## Step-by-Step Installation
-
-### 1. Clone the repository
+## Install
 
 ```bash
-git clone <repo-url>
-cd Inverted_Pendulum_RL
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+python -m ruff check .
 ```
 
-### 2. Create a Python 3.12 virtual environment
+`requirements.txt` contains the simulation/training dependencies. `requirements-dev.txt` adds pytest and Ruff. `requirements-hardware.txt` provides the smaller NumPy/YAML/serial dependency set for the physical controller. Version ranges express compatibility targets; they are not a byte-for-byte environment lock. Record `python -m pip freeze` alongside any experiment you intend to report.
+
+No display is needed for physics or policy tests. Use `MPLBACKEND=Agg` and `--no-show` for headless training.
+
+## Train one model
 
 ```bash
-python3.12 -m venv venv
-source venv/bin/activate      # macOS / Linux
-# venv\Scripts\activate       # Windows
+# Fast integration check (640 environment steps)
+MPLBACKEND=Agg python -m training.train_cgat --config configs/smoke.yaml --variant base --seed 42 --no-show
+
+# Full runs: choose the controller family
+MPLBACKEND=Agg python -m training.train_cgat --config configs/default.yaml --variant base --seed 0 --no-show
+MPLBACKEND=Agg python -m training.train_ppo --policy gnn_mpnn --seed 0 --no-show
+MPLBACKEND=Agg python -m training.train_ppo --policy gnn_transformer --seed 0 --no-show
+MPLBACKEND=Agg python -m training.train_ppo --policy mlp --seed 0 --no-show
+MPLBACKEND=Agg python -m training.train_dqn --policy gnn --seed 0 --no-show
+MPLBACKEND=Agg python -m training.train_dqn --policy mlp --seed 0 --no-show
 ```
 
-### 3. Install dependencies
+The default budgets are 2.6 million PPO steps and 2 million DQN steps. PPO collects `n_envs × rollout_steps` transitions per update and rounds down to complete rollouts. All trainers honor the YAML reward and initialization sections. Seeded best checkpoints use names such as `checkpoints/cgat_base_ppo_seed0_best.pt`; seed zero also writes a legacy unseeded alias. Best-checkpoint selection needs at least 20 completed episodes.
+
+`configs/smoke.yaml` deliberately uses short episodes and small networks. Evaluate its checkpoint with the same configuration. It is unsuitable for performance comparisons.
+
+## Evaluate
+
+Train first, then use the same architecture/configuration and seed:
 
 ```bash
-pip install --upgrade pip
-pip install -r requirements.txt
+# Small end-to-end check after the CGAT smoke run
+MPLBACKEND=Agg python -m eval.eval_cgat --config configs/smoke.yaml --variant base --seed 42 --tests 1 --n_eval_episodes 2 --n_sweep_points 3
+
+# Example parameter sweeps for a full run
+MPLBACKEND=Agg python -m eval.eval_ppo --policy gnn_mpnn --seed 0 --tests 1 2 --n_eval_episodes 20 --n_sweep_points 20
+
+# LQR reference (no learned checkpoint required)
+MPLBACKEND=Agg python -m eval.eval_lqr --help
 ```
 
-This installs: `mujoco`, `gymnasium`, `torch`, `numpy`, `scipy`, `pyyaml`, `matplotlib`.
+Test selectors are `1` for length, `2` for mass, `2.5` for topology, `3` for length × mass heatmaps, and `4` for few-shot adaptation where supported. Use `--help` for each evaluator's available settings. Results and plots are regenerated under `eval/results/` and `eval/plots/`.
 
-### 4. Verify MuJoCo works
+For meaningful comparisons, use identical parameter grids, episode budgets, reward settings, initialization distributions, and seed sets. Report individual seeds, variability, failures, and the exact revision/configuration. See [evaluation methodology](docs/EXPERIMENTS.md).
+
+## Multi-seed jobs
 
 ```bash
-python3.12 tests/test_physics.py
+MPLBACKEND=Agg python train_all.py --only ppo_gnn_mpnn cgat_base --seeds 0 1 2
+python eval_all.py --only ppo_gnn_mpnn cgat_base --seeds 0 1 2 --tests 1 2 --dry-run
 ```
 
-Expected output: trajectory accuracy, energy conservation, and graph structure checks all pass. If MuJoCo is not found, install it manually:
+The runners use the current Python interpreter. Inspect the dry-run evaluation plan before launching a full grid. Experimental fine-tuning configurations live in `configs/experiments/`; many need a compatible locally trained initialization checkpoint and are not standalone baseline recipes.
+
+## Interactive physics view
 
 ```bash
-pip install mujoco
+python tests/test_visual.py
 ```
 
-MuJoCo 2.3+ bundles its own binaries — no separate license or system install required.
-
-### 5. (Optional) Verify visual rendering
+On macOS, MuJoCo's passive viewer needs its `mjpython` launcher:
 
 ```bash
-python3.12 tests/test_visual.py
+mjpython tests/test_visual.py
 ```
 
-Opens a MuJoCo viewer window showing the pendulum for 3 seconds. Requires a display; skip on headless servers.
+This is a manually launched three-second physics demonstration. Automated tests do not open a viewer.
 
----
-
-## Running Training
-
-All hyperparameters are in `configs/default.yaml`. Modify there before running.
+## Physical controller
 
 ```bash
-# DQN variants
-python3.12 training/train_dqn.py --policy gnn        # GNN-MPNN DQN
-python3.12 training/train_dqn.py --policy mlp        # MLP baseline DQN
-
-# PPO variants
-python3.12 training/train_ppo.py --policy gnn_mpnn        # GNN MPNN PPO
-python3.12 training/train_ppo.py --policy gnn_transformer # GNN Transformer PPO
-python3.12 training/train_ppo.py --policy mlp             # MLP baseline PPO
+python -m pip install -r requirements-hardware.txt
+python -m traditional.run_controller --help
 ```
 
-Checkpoints saved to `checkpoints/{policy}_dqn_best.pt` / `checkpoints/{policy}_ppo_best.pt`.
-Training curves saved to `checkpoints/{policy}_*_training_curve.png`.
-
----
-
-## Running Evaluation
-
-Requires a trained checkpoint to exist in `checkpoints/`.
-
-```bash
-# DQN OOD evaluation
-python3.12 eval/eval_dqn.py --policy gnn
-python3.12 eval/eval_dqn.py --policy mlp
-
-# PPO OOD evaluation
-python3.12 eval/eval_ppo.py --policy gnn_mpnn
-python3.12 eval/eval_ppo.py --policy gnn_transformer
-python3.12 eval/eval_ppo.py --policy mlp
-
-# Run only specific tests (1=length sweep, 2=mass sweep, 3=heatmap)
-python3.12 eval/eval_dqn.py --policy gnn --tests 1 2
-python3.12 eval/eval_ppo.py --policy gnn_mpnn --tests 3
-
-# Custom checkpoint path
-python3.12 eval/eval_dqn.py --policy gnn --checkpoint checkpoints/my_model.pt
-```
-
-Results cached to `eval/cache/`, plots saved to `eval/plots/`.
-
----
-
-## Running Hyperparameter Ablation
-
-```bash
-# Single sweep (3 runs × 1M steps each)
-python3.12 training/ablation_ppo.py --policy gnn_mpnn --sweep lr
-python3.12 training/ablation_ppo.py --policy gnn_mpnn --sweep n_envs
-
-# All sweeps (18 runs — leave overnight)
-python3.12 training/ablation_ppo.py --policy gnn_mpnn --sweep all
-
-# Shorter runs for quick signal
-python3.12 training/ablation_ppo.py --policy gnn_mpnn --sweep lr --steps 500000
-```
-
-Available sweeps: `lr`, `n_envs`, `rollout_steps`, `gae_lambda`, `entropy_coef`, `n_epochs`.
-Results cached to `checkpoints/ablation/` and reused on re-runs.
-
----
-
-## Project Structure
-
-```
-Inverted_Pendulum_RL/
-├── configs/
-│   └── default.yaml          # All hyperparameters
-├── env/
-│   ├── pendulum_env.py       # Custom Gymnasium environment
-│   ├── mujoco_builder.py     # Programmatic MJCF XML generation
-│   └── rewards.py            # Composite reward function
-├── graph/
-│   ├── graph_builder.py      # Graph observation construction
-│   └── graph_utils.py        # Validation utilities
-├── models/
-│   ├── base_dqn.py           # Abstract DQN base
-│   ├── base_ppo.py           # Abstract PPO actor-critic base
-│   ├── gnn_dqn.py            # GNN-MPNN DQN
-│   ├── mlp_dqn.py            # MLP DQN baseline
-│   ├── gnn_mpnn_ppo.py       # GNN-MPNN PPO
-│   ├── gnn_transformer_ppo.py# GNN-Transformer PPO
-│   └── mlp_ppo.py            # MLP PPO baseline
-├── training/
-│   ├── train_dqn.py          # DQN training loop
-│   ├── train_ppo.py          # PPO training loop (parallel envs)
-│   └── ablation_ppo.py       # Hyperparameter ablation framework
-├── eval/
-│   ├── eval_dqn.py           # OOD evaluation for DQN
-│   └── eval_ppo.py           # OOD evaluation for PPO
-├── tests/
-│   ├── test_physics.py       # MuJoCo vs scipy validation
-│   └── test_visual.py        # Visual rendering test
-├── checkpoints/              # Saved model weights and training curves
-├── eval/plots/               # OOD evaluation plots
-├── eval/cache/               # Cached evaluation results (.npz)
-├── README.md
-├── SETUP.md
-├── ATTRIBUTION.md
-├── ITERATIONS.md
-└── requirements.txt
-```
+Read [traditional/README.md](traditional/README.md), calibrate `traditional/config.yaml`, and complete firmware integration before connecting the controller to hardware. `--dry-run` still requires a real sensor stream and sends zero PWM; it is not a simulator.

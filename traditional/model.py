@@ -44,7 +44,7 @@ def mass_matrix_upright(params: PhysicalParams) -> np.ndarray:
         j_v = np.zeros(size, dtype=float)
         j_v[0] = 1.0
         for r in range(i + 1):
-            j_v[r + 1] = lengths[r] if r < i else 0.5 * lengths[i]
+            j_v[r + 1] = np.sum(lengths[r:i]) + 0.5 * lengths[i]
         mass_matrix += masses[i] * np.outer(j_v, j_v)
 
         # Rod rotational kinetic energy around its own center of mass.
@@ -99,7 +99,9 @@ def continuous_state_space(params: PhysicalParams) -> tuple[np.ndarray, np.ndarr
     return a, b
 
 
-def discretize_euler(a: np.ndarray, b: np.ndarray, dt: float) -> tuple[np.ndarray, np.ndarray]:
+def discretize_euler(
+    a: np.ndarray, b: np.ndarray, dt: float
+) -> tuple[np.ndarray, np.ndarray]:
     """Simple small-dt discretization: x[k+1] = Ad x[k] + Bd u[k]."""
     if dt <= 0.0:
         raise ValueError("dt must be positive")
@@ -108,13 +110,15 @@ def discretize_euler(a: np.ndarray, b: np.ndarray, dt: float) -> tuple[np.ndarra
     return ad, bd
 
 
-def bryson_q_r(max_state: np.ndarray, max_force: float) -> tuple[np.ndarray, np.ndarray]:
+def bryson_q_r(
+    max_state: np.ndarray, max_force: float
+) -> tuple[np.ndarray, np.ndarray]:
     """Build diagonal Q and scalar R from acceptable maximum deviations."""
     max_state = np.asarray(max_state, dtype=float)
     if np.any(max_state <= 0.0):
         raise ValueError("all max_state entries must be positive")
     if max_force <= 0.0:
         raise ValueError("max_force must be positive")
-    q = np.diag(1.0 / (max_state ** 2))
-    r = np.array([[1.0 / (max_force ** 2)]], dtype=float)
+    q = np.diag(1.0 / (max_state**2))
+    r = np.array([[1.0 / (max_force**2)]], dtype=float)
     return q, r
